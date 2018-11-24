@@ -107,8 +107,12 @@
 
    * :port — defaults to 0, which autoselects an open port
    * :bind — bind address, by default \"127.0.0.1\"
+   * :auth-wrapper - wrapper whose returned handler will be called
+       with each incoming message, before doing anything else.  When
+       no wrapper is provided, all messages are accepted.
    * :handler — the nREPL message handler to use for each incoming connection;
-       defaults to the result of `(default-handler)`
+       only receives messages permitted by the :auth-wrapper; defaults to
+       `(default-handler)`.
    * :transport-fn — a function that, given a java.net.Socket corresponding
        to an incoming connection, will return a value satisfying the
        nrepl.Transport protocol for that Socket.
@@ -120,8 +124,10 @@
    either via `stop-server`, (.close server), or automatically via `with-open`.
    The port that the server is open on is available in the :port slot of the
    server map (useful if the :port option is 0 or was left unspecified."
-  [& {:keys [port bind transport-fn handler ack-port greeting-fn]}]
+  [& {:keys [port bind transport-fn auth-wrapper handler ack-port greeting-fn]}]
   (let [port (or port 0)
+        auth-wrapper (or auth-wrapper identity)
+        handler (or handler (default-handler))
         addr (fn [^String bind ^Integer port] (InetSocketAddress. bind port))
         make-ss #(doto (ServerSocket.)
                    (.setReuseAddress true)
@@ -136,8 +142,9 @@
                         (atom #{})
                         (or transport-fn t/bencode)
                         greeting-fn
-                        (or handler (default-handler)))]
+                        (auth-wrapper handler))]
     (future (accept-connection server))
+    (binding [*out* *err*] (println "nREPL listening on" (:port server)))
     (when ack-port
       (ack/send-ack (:port server) ack-port))
     server))

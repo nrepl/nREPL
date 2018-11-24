@@ -136,7 +136,9 @@ nil
 WARNING: Keep in mind that running a nREPL server on a public address
 is an epic security hole! As the connections are insecure (no
 authentication, no authorization) by default anyone can connect to
-your app and modify its behaviour or run code on the remote host.
+your app and modify its behaviour or run code on the remote host.  And
+unless you're specifying a suitable `:auth-wrapper`, then the same
+access is always available for other local users.
 
 Depending on what the lifecycle of your application is, whether you want to be
 able to easily restart the server, etc., you might want to put the value

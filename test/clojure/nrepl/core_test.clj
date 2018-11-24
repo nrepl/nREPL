@@ -24,13 +24,16 @@
 
 (def ^{:dynamic true} *server* nil)
 
-(defn repl-server-fixture
-  [f]
-  (with-open [server (server/start-server)]
-    (binding [*server* server]
-      (f)
-      (set! *print-length* nil)
-      (set! *print-level* nil))))
+(defn call-with-bound-repl-server
+  ([f] (call-with-bound-repl-server nil f))
+  ([args f]
+   (with-open [server (apply server/start-server args)]
+     (binding [*server* server]
+       (f))
+     (set! *print-length* nil)
+     (set! *print-level* nil))))
+
+(def repl-server-fixture call-with-bound-repl-server)
 
 (use-fixtures :each repl-server-fixture)
 

@@ -154,6 +154,9 @@
   -h/--host ADDR              Host address to connect to when using --connect. Defaults to \"127.0.0.1\".
   -p/--port PORT              Start nREPL on PORT. Defaults to 0 (random port) if not specified.
   --ack ACK-PORT              Acknowledge the port of this server to another nREPL server running on ACK-PORT.
+  --auth-wrapper VAR          Wrapper whose returned handler will be called with
+                              each incoming message, before doing anything else.
+                              When no wrapper is provided, all messages are accepted.
   -n/--handler HANDLER        The nREPL message handler to use for each incoming connection; defaults to the result of `(nrepl.server/default-handler)`.
   -m/--middleware MIDDLEWARE  A sequence of vars, representing middleware you wish to mix in to the nREPL handler.
   -t/--transport TRANSPORT    The transport to use. By default that's nrepl.transport/bencode.
@@ -237,7 +240,9 @@
   [options]
   (reduce-kv (fn [result k v]
                (case k
-                 (:handler :transport :middleware) (assoc result k (edn/read-string v))
+                 (:handler :transport :middleware :auth-wrapper)
+                 (assoc result k (edn/read-string v))
+
                  result))
              options
              options))
@@ -264,6 +269,8 @@
         (exit 0))
       ;; otherwise we assume we have to start an nREPL server
       (let [bind (:bind options)
+            auth-wrapper (some->> (options :auth-wrapper)
+                                  (require-and-resolve :auth-wrapper))
             ;; if some handler was explicitly passed we'll use it, otherwise we'll build one
             ;; from whatever was passed via --middleware
             middleware (sanitize-middleware-option (:middleware options))
@@ -272,7 +279,8 @@
             transport (some->> (:transport options) (require-and-resolve :transport))
             greeting-fn (if (= transport #'transport/tty) #'transport/tty-greeting)
             server (start-server :port port :bind bind :handler handler
-                                 :transport-fn transport :greeting-fn greeting-fn)]
+                                 :transport-fn transport :greeting-fn greeting-fn
+                                 :auth-wrapper auth-wrapper)]
         (when-let [ack-port (:ack options)]
           (binding [*out* *err*]
             (println (format "ack'ing my port %d to other server running on port %d"
