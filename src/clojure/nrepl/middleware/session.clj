@@ -266,23 +266,22 @@
    and *err* content can be associated with the originating message)."
   [h]
   (fn [{:keys [op session transport out-limit] :as msg}]
-    (let [the-session (if session
-                        (@sessions session)
-                        (create-session transport))]
-      (if-not the-session
-        (t/send transport (response-for msg :status #{:error :unknown-session :done}))
-        (let [msg (assoc msg :session the-session)]
-          ;; TODO: yak, this is ugly; need to cleanly thread out-limit through to
-          ;; session-out without abusing a dynamic var
-          ;; (there's no reason to allow a connected client to fark around with
-          ;; a session-out's "buffer")
-          (when out-limit (swap! the-session assoc #'*out-limit* out-limit))
-          (case op
-            "clone" (register-session msg)
-            "close" (close-session msg)
-            "ls-sessions" (t/send transport (response-for msg :status :done
-                                                          :sessions (or (keys @sessions) [])))
-            (h msg)))))))
+    (if-some [the-session (if session
+                            (@sessions session)
+                            (create-session transport))]
+      (let [msg (-> msg (assoc :session the-session) (assoc-in [:print-options :nrepl/session] the-session))]
+        ;; TODO: yak, this is ugly; need to cleanly thread out-limit through to
+        ;; session-out without abusing a dynamic var
+        ;; (there's no reason to allow a connected client to fark around with
+        ;; a session-out's "buffer")
+        (when out-limit (swap! the-session assoc #'*out-limit* out-limit))
+        (case op
+          "clone" (register-session msg)
+          "close" (close-session msg)
+          "ls-sessions" (t/send transport (response-for msg :status :done
+                                                        :sessions (or (keys @sessions) [])))
+          (h msg)))
+      (t/send transport (response-for msg :status #{:error :unknown-session :done})))))
 
 (set-descriptor! #'session
                  {:requires #{}

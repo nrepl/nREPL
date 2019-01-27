@@ -67,7 +67,7 @@
 
 (defmacro def-repl-test
   [name & body]
-  `(deftest ~(with-meta name (merge {:private true} (meta name)))
+  `(deftest ~name
      (with-open [transport# (connect :port (:port *server*)
                                      :transport-fn *transport-fn*)]
        (let [~'transport transport#
@@ -284,7 +284,15 @@
                                 :printer `custom-printer
                                 :print-options {:sub "bar"}})
                (combine-responses)
-               (:value))))))
+               (:value)))))
+  (testing "eliding printing function should be used"
+    (is (re-matches #"\(0 1 2 3 4 5 6 7 8 9 #unrepl/\.\.\. \{:get \(nrepl\.print\.elisions/fetch :[A-Za-a0-9_]+\)\}\)"
+                    (-> (message client {:op :eval
+                                         :code "(range)"
+                                         :printer 'nrepl.print.elisions/printer})
+                        combine-responses
+                        :value
+                        first)))))
 
 (def-repl-test session-return-recall
   (testing "sessions persist across connections"
@@ -608,3 +616,4 @@
     (Thread/sleep 100)
     (is (= #{"done"} (-> session (message {:op :interrupt}) first :status set)))
     (is (= #{"done" "interrupted"} (-> resp combine-responses :status)))))
+
