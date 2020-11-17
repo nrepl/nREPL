@@ -1,6 +1,7 @@
 (ns nrepl.server
   "Default server implementations"
   {:author "Chas Emerick"}
+  (:refer-clojure :exclude [future future-call])
   (:require
    [nrepl.ack :as ack]
    [nrepl.middleware.dynamic-loader :as dynamic-loader]
@@ -16,10 +17,61 @@
   (:import
    [java.net InetSocketAddress ServerSocket]))
 
+(defn ^:private deref-future
+  ([^java.util.concurrent.Future fut]
+   (.get fut))
+  ([^java.util.concurrent.Future fut timeout-ms timeout-val]
+   (try (.get fut timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+        (catch java.util.concurrent.TimeoutException e
+          timeout-val))))
+
+(defn platform-future-call
+  "Takes a function of no args and yields a future object that will
+  invoke the function in another thread, and will cache the result and
+  return it on all subsequent calls to deref/@. If the computation has
+  not yet finished, calls to deref/@ will block, unless the variant
+  of deref with timeout is used. See also - realized?.
+
+  Copied from clojure.core and modified to accept a thread-factory"
+  {:static true}
+  [thread-factory f]
+  (let [f (bound-fn* f)
+        fut (java.util.concurrent.CompletableFuture.)]
+    (.start
+     (.newThread thread-factory
+                 #(.complete fut (f))))
+    (reify
+      clojure.lang.IDeref
+      (deref [_] (deref-future fut))
+      clojure.lang.IBlockingDeref
+      (deref
+        [_ timeout-ms timeout-val]
+        (deref-future fut timeout-ms timeout-val))
+      clojure.lang.IPending
+      (isRealized [_] (.isDone fut))
+      java.util.concurrent.Future
+      (get [_] (.get fut))
+      (get [_ timeout unit] (.get fut timeout unit))
+      (isCancelled [_] (.isCancelled fut))
+      (isDone [_] (.isDone fut))
+      (cancel [_ interrupt?] (.cancel fut interrupt?)))))
+
+(defmacro platform-future
+  "Takes a body of expressions and yields a future object that will
+  invoke the body in another thread, and will cache the result and
+  return it on all subsequent calls to deref/@. If the computation has
+  not yet finished, calls to deref/@ will block, unless the variant of
+  deref with timeout is used. See also - realized?.
+
+  Copied from clojure.core and modified to accept a thread-factory"
+  [thread-factory & body] `(platform-future-call ~thread-factory (^{:once true} fn* [] ~@body)))
+
 (defn handle*
-  [msg handler transport]
+  [msg handler transport thread-factory]
   (try
-    (handler (assoc msg :transport transport))
+    (handler (assoc msg
+                    :transport transport
+                    :thread-factory thread-factory))
     (catch Throwable t
       (log t "Unhandled REPL handler exception processing message" msg))))
 
@@ -34,10 +86,11 @@
 (defn handle
   "Handles requests received via [transport] using [handler].
    Returns nil when [recv] returns nil for the given transport."
-  [handler transport]
+  [handler transport thread-factory]
   (when-let [msg (normalize-msg (t/recv transport))]
-    (future (handle* msg handler transport))
-    (recur handler transport)))
+    (platform-future thread-factory
+                     (handle* msg handler transport thread-factory))
+    (recur handler transport thread-factory)))
 
 (defn- safe-close
   [^java.io.Closeable x]
@@ -47,19 +100,20 @@
       (log e "Failed to close " x))))
 
 (defn- accept-connection
-  [{:keys [^ServerSocket server-socket open-transports transport greeting handler]
+  [{:keys [^ServerSocket server-socket open-transports transport greeting handler thread-factory]
     :as server}]
   (when-not (.isClosed server-socket)
     (let [sock (.accept server-socket)]
-      (future (let [transport (transport sock)]
-                (try
-                  (swap! open-transports conj transport)
-                  (when greeting (greeting transport))
-                  (handle handler transport)
-                  (finally
-                    (swap! open-transports disj transport)
-                    (safe-close transport)))))
-      (future (accept-connection server)))))
+      (platform-future thread-factory
+                       (let [transport (transport sock)]
+                         (try
+                           (swap! open-transports conj transport)
+                           (when greeting (greeting transport))
+                           (handle handler transport thread-factory)
+                           (finally
+                             (swap! open-transports disj transport)
+                             (safe-close transport)))))
+      (platform-future thread-factory (accept-connection server)))))
 
 (defn stop-server
   "Stops a server started via `start-server`."
@@ -129,9 +183,15 @@
       (binding [dynamic-loader/*state* state]
         ((:handler @state) msg)))))
 
-(defrecord Server [server-socket port open-transports transport greeting handler]
+(defrecord Server [server-socket port open-transports transport greeting handler thread-factory]
   java.io.Closeable
   (close [this] (stop-server this)))
+
+(defn create-default-thread-factory
+  []
+  (reify java.util.concurrent.ThreadFactory
+    (newThread [_ r]
+      (Thread. r))))
 
 (defn start-server
   "Starts a socket-based nREPL server.  Configuration options include:
@@ -156,7 +216,7 @@
    either via `stop-server`, (.close server), or automatically via `with-open`.
    The port that the server is open on is available in the :port slot of the
    server map (useful if the :port option is 0 or was left unspecified."
-  [& {:keys [port bind transport-fn handler ack-port greeting-fn]}]
+  [& {:keys [port bind transport-fn handler ack-port greeting-fn thread-factory]}]
   (let [port (or port 0)
         addr (fn [^String bind ^Integer port] (InetSocketAddress. bind port))
         transport-fn (or transport-fn t/bencode)
@@ -167,13 +227,16 @@
         ss (doto (ServerSocket.)
              (.setReuseAddress true)
              (.bind (addr bind port)))
+        thread-factory (or thread-factory (create-default-thread-factory))
         server (Server. ss
                         (.getLocalPort ss)
                         (atom #{})
                         transport-fn
                         greeting-fn
-                        (or handler (default-handler)))]
-    (future (accept-connection server))
+                        (or handler (default-handler))
+                        thread-factory)]
+    (platform-future thread-factory
+                     (accept-connection server))
     (when ack-port
       (ack/send-ack (:port server) ack-port transport-fn))
     server))

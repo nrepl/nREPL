@@ -1078,3 +1078,17 @@
              (set/intersection
               (dcls (first (:value resp2)))
               (dcls (first (:value resp1))))))))))
+
+(deftest test-with-thread-factory
+  (testing "Ensure that default thread-factory is not called when a threadfactory is provided"
+    (with-redefs [server/create-default-thread-factory (fn [] (is nil "Default thread factory must not be called when thread factory is provided"))]
+      (with-open [server (server/start-server
+                          :thread-factory (reify java.util.concurrent.ThreadFactory
+                                            (newThread [_ r]
+                                              (Thread. r))))]
+        (let [transport (connect :port (:port server))
+              client (client transport Long/MAX_VALUE)]
+          (is (= ["3"]
+                 (-> (message client {:op "eval" :code "(- 4 1)"})
+                     combine-responses
+                     :value))))))))
