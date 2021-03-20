@@ -8,13 +8,15 @@
    [nrepl.core-test :refer [*server* *transport-fn* transport-fns]]
    [nrepl.server :as server]
    [nrepl.transport :as transport])
-  (:import (com.hypirion.io Pipe ClosingPipe)))
+  (:import
+   (com.hypirion.io Pipe ClosingPipe)
+   (nrepl.server Server)))
 
 (defn- start-server-for-transport-fn
   [transport-fn f]
-  (with-open [server (server/start-server
-                      :transport-fn transport-fn
-                      :handler (ack/handle-ack (server/default-handler)))]
+  (with-open [^Server server (server/start-server
+                              :transport-fn transport-fn
+                              :handler (ack/handle-ack (server/default-handler)))]
     (binding [*server* server
               *transport-fn* transport-fn]
       (testing (str (-> transport-fn meta :name) " transport")
@@ -73,6 +75,7 @@
 (deftest connection-opts
   (is (= {:port 5000
           :host "0.0.0.0"
+          :socket nil
           :transport #'transport/bencode
           :repl-fn #'nrepl.cmdline/run-repl}
          (cmd/connection-opts {:port "5000"
@@ -111,9 +114,9 @@
       (is (= "" output)))))
 
 (deftest server-started-message
-  (with-open [server (server/start-server
-                      :transport-fn #'transport/bencode
-                      :handler server/default-handler)]
+  (with-open [^Server server (server/start-server
+                              :transport-fn #'transport/bencode
+                              :handler server/default-handler)]
     (is (re-find #"nREPL server started on port \d+ on host .* - .*//.*:\d+"
                  (cmd/server-started-message
                   server
@@ -197,7 +200,7 @@
 
 (deftest no-tty-client
   (testing "Trying to connect with the tty transport should fail."
-    (with-open [server (server/start-server :transport-fn #'transport/tty)]
+    (with-open [^Server server (server/start-server :transport-fn #'transport/tty)]
       (let [options (cmd/connection-opts {:port      (:port server)
                                           :host      "localhost"
                                           :transport 'nrepl.transport/tty})]

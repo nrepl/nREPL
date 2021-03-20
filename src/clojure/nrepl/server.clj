@@ -12,9 +12,11 @@
    nrepl.middleware.session
    nrepl.middleware.sideloader
    [nrepl.misc :refer [log noisy-future response-for returning]]
+   [nrepl.socket :as socket :refer [inet-socket unix-server-socket]]
    [nrepl.transport :as t])
   (:import
-   [java.net InetSocketAddress ServerSocket SocketException]))
+   (java.net SocketException)
+   [java.nio.channels ClosedChannelException]))
 
 (defn handle*
   [msg handler transport]
@@ -47,28 +49,32 @@
       (log e "Failed to close " x))))
 
 (defn- accept-connection
-  [{:keys [^ServerSocket server-socket open-transports transport greeting handler]
+  [{:keys [server-socket open-transports transport greeting handler]
     :as server}]
-  (when-not (.isClosed server-socket)
-    (let [sock (.accept server-socket)]
-      (noisy-future (let [transport (transport sock)]
-                      (try
-                        (swap! open-transports conj transport)
-                        (when greeting (greeting transport))
-                        (handle handler transport)
-                        (catch SocketException ex
-                          nil)
-                        (finally
-                          (swap! open-transports disj transport)
-                          (safe-close transport)))))
-      (noisy-future (try
-                      (accept-connection server)
-                      (catch SocketException ex
-                        nil))))))
+  (when-let [sock (try
+                    (socket/accept server-socket)
+                    (catch ClosedChannelException ex
+                      nil))]
+    (noisy-future
+     (let [transport (transport sock)]
+       (try
+         (swap! open-transports conj transport)
+         (when greeting (greeting transport))
+         (handle handler transport)
+         (catch SocketException ex
+           nil)
+         (finally
+           (swap! open-transports disj transport)
+           (safe-close transport)))))
+    (noisy-future
+     (try
+       (accept-connection server)
+       (catch SocketException ex
+         nil)))))
 
 (defn stop-server
   "Stops a server started via `start-server`."
-  [{:keys [open-transports ^ServerSocket server-socket] :as server}]
+  [{:keys [open-transports ^java.io.Closeable server-socket] :as server}]
   (returning server
     (.close server-socket)
     (swap! open-transports
@@ -143,6 +149,7 @@
 
    * :port — defaults to 0, which autoselects an open port
    * :bind — bind address, by default \"127.0.0.1\"
+   * :socket - filesystem socket path (alternative to :port and :bind)
    * :handler — the nREPL message handler to use for each incoming connection;
        defaults to the result of `(default-handler)`
    * :transport-fn — a function that, given a java.net.Socket corresponding
@@ -161,20 +168,17 @@
    either via `stop-server`, (.close server), or automatically via `with-open`.
    The port that the server is open on is available in the :port slot of the
    server map (useful if the :port option is 0 or was left unspecified."
-  ^nrepl.server.Server
-  [& {:keys [port bind transport-fn handler ack-port greeting-fn]}]
-  (let [port (or port 0)
-        addr (fn [^String bind ^Integer port] (InetSocketAddress. bind port))
-        transport-fn (or transport-fn t/bencode)
-        ;; We fallback to 127.0.0.1 instead of to localhost to avoid
-        ;; a dependency on the order of ipv4 and ipv6 records for
-        ;; localhost in /etc/hosts
-        bind (or bind "127.0.0.1")
-        ss (doto (ServerSocket.)
-             (.setReuseAddress true)
-             (.bind (addr bind port)))
+  [& {:keys [port bind socket transport-fn handler ack-port greeting-fn]}]
+  (when (and socket (or port bind))
+    (let [msg "Cannot listen on both port and filesystem socket"]
+      (log msg)
+      (throw (ex-info msg {:nrepl/kind ::invalid-start-request}))))
+  (let [transport-fn (or transport-fn t/bencode)
+        ss (if socket
+             (unix-server-socket socket)
+             (inet-socket bind port))
         server (Server. ss
-                        (.getLocalPort ss)
+                        (when-not socket (.getLocalPort ss))
                         (atom #{})
                         transport-fn
                         greeting-fn

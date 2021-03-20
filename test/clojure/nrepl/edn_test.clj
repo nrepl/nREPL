@@ -2,11 +2,13 @@
   (:require [clojure.test :refer [deftest is testing]]
             [nrepl.core :as nrepl]
             [nrepl.server :as server]
-            [nrepl.transport :as transport]))
+            [nrepl.transport :as transport])
+  (:import
+   (nrepl.server Server)))
 
 (defn return-evaluation
   [message]
-  (with-open [server (server/start-server :transport-fn transport/edn)]
+  (with-open [^Server server (server/start-server :transport-fn transport/edn)]
     (with-open [^nrepl.transport.FnTransport
                 conn (nrepl/connect :transport-fn transport/edn
                                     :port (:port server))]
