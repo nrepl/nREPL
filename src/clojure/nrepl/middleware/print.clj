@@ -5,6 +5,7 @@
    :added  "0.6"}
   (:refer-clojure :exclude [print])
   (:require
+   [nrepl.config :as config]
    [nrepl.middleware :refer [set-descriptor!]]
    [nrepl.misc :as misc]
    [nrepl.transport :as transport])
@@ -59,6 +60,9 @@
 
 (def configuration-keys
   [::print-fn ::stream? ::buffer-size ::quota ::keys])
+
+(def providable-keys
+  [::print ::options ::stream? ::buffer-size ::quota ::keys])
 
 (defn- to-char-array
   ^chars
@@ -217,21 +221,22 @@
   its transport. If any options are specified in both, those in the request will
   be preferred."
   [handler]
-  (fn [{:keys [::options] :as msg}]
-    (let [print-var (resolve-print msg)
+  (fn [msg]
+    (let [msg* (merge (select-keys config/config providable-keys) msg)
+          print-var (resolve-print msg*)
           print (fn [value writer]
                   (if print-var
-                    (print-var value writer options)
+                    (print-var value writer (::options msg*))
                     (pr-on value writer)))
-          msg (assoc msg ::print-fn print)
-          opts (cond-> (select-keys msg configuration-keys)
+          msg** (assoc msg* ::print-fn print)
+          opts (cond-> (select-keys msg** configuration-keys)
                  ;; no print-fn provided in the request, so defer to the response
                  (nil? print-var)
                  (dissoc ::print-fn)
                  ;; in bencode empty list is logical false
-                 (contains? msg ::stream?)
+                 (contains? msg** ::stream?)
                  (update ::stream? #(if (= [] %) false (boolean %))))]
-      (handler (assoc msg :transport (printing-transport msg opts))))))
+      (handler (assoc msg** :transport (printing-transport msg** opts))))))
 
 (set-descriptor! #'wrap-print {:requires #{}
                                :expects #{}

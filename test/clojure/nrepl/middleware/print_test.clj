@@ -8,6 +8,7 @@
    IDs, and message IDs"
   (:refer-clojure :exclude [print])
   (:require [clojure.test :refer [deftest is testing]]
+            [nrepl.config :as config]
             [nrepl.core :refer [combine-responses]]
             [nrepl.middleware.print :as print]
             [nrepl.transport :as t])
@@ -243,3 +244,33 @@
                      print/*quota*    8]
              (handle {:value        (range 512)
                       ::print/quota 16}))))))
+
+(deftest print-fn-var-only
+  (testing-print "setting *print-fn* works, but ::print-fn in the message does not"
+    (is (not= (handle {:value (range 10)
+                       ::print/print-fn custom-printer-2})
+              (binding [print/*print-fn* custom-printer-2]
+                (handle {:value (range 10)}))))))
+
+(deftest config-override
+  (testing-print "config file can be used to set default printer"
+    (with-redefs [config/config {::print/print   `custom-printer
+                                 ::print/options {:sub "bar"}}]
+      (is (= (handle {:value          3
+                      ::print/print   `custom-printer
+                      ::print/options {:sub "bar"}})
+             (handle {:value 3})))))
+  (testing-print "config file can be used to set streaming"
+    (with-redefs [config/config {::print/stream? 1
+                                 ::print/buffer-size 8}]
+      (is (= [{:value "(0 1 2 3"}
+              {:value " 4 5 6 7"}
+              {:value " 8 9)"}
+              {}]
+             (handle {:value (range 10)}))))))
+
+(deftest print-utils
+  (testing-print "Using the built-in util-fn to pretty print"
+    (is (= [{:value "(0\n 1\n 2\n 3\n 4\n 5\n 6\n 7\n 8\n 9\n 10\n 11\n 12\n 13\n 14\n 15\n 16\n 17\n 18\n 19\n 20\n 21\n 22\n 23\n 24\n 25\n 26\n 27\n 28\n 29)"}]
+           (handle {:value (range 30)
+                    ::print/print `nrepl.util.print/pprint})))))
