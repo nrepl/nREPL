@@ -18,6 +18,8 @@
    (java.net SocketException)
    [java.nio.channels ClosedChannelException]))
 
+(def orig-warn-on-reflection *warn-on-reflection*)
+
 (defn handle*
   [msg handler transport]
   (try
@@ -144,6 +146,13 @@
   java.io.Closeable
   (close [this] (stop-server this)))
 
+(set! *warn-on-reflection* false)
+
+(defn- get-local-port [sock]
+  (.getLocalPort sock))
+
+(set! *warn-on-reflection* orig-warn-on-reflection)
+
 (defn start-server
   "Starts a socket-based nREPL server.  Configuration options include:
 
@@ -178,7 +187,7 @@
              (unix-server-socket socket)
              (inet-socket bind port))
         server (Server. ss
-                        (when-not socket (.getLocalPort ss))
+                        (when-not socket (get-local-port ss))
                         (atom #{})
                         transport-fn
                         greeting-fn

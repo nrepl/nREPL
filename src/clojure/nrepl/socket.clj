@@ -12,8 +12,11 @@
    (java.io BufferedInputStream BufferedOutputStream File)
    (java.net InetSocketAddress ServerSocket Socket StandardProtocolFamily URI)
    (java.nio ByteBuffer)
+   (java.nio.file Path)
    (java.nio.channels Channels ClosedChannelException
                       ServerSocketChannel SocketChannel)))
+
+(def orig-warn-on-reflection *warn-on-reflection*)
 
 (defmacro find-class [full-path]
   `(try
@@ -36,23 +39,23 @@
 
 ;; Unix domain sockets
 
-(def junixsocket-address-class
+(def ^Class junixsocket-address-class
   (find-class 'org.newsclub.net.unix.AFUNIXSocketAddress))
 
-(def junixsocket-server-class
+(def ^Class junixsocket-server-class
   (find-class 'org.newsclub.net.unix.AFUNIXServerSocket))
 
-(def jdk-unix-address-class
+(def ^Class jdk-unix-address-class
   (find-class 'java.net.UnixDomainSocketAddress))
 
-(def jdk-unix-server-class
+(def ^Class jdk-unix-server-class
   (find-class 'java.nio.channels.ServerSocketChannel))
 
 (def ^:private test-junixsocket?
   ;; Make it possible to test junixsocket even when JDK >= 16
   (= "true" (System/getProperty "nrepl.test.junixsocket")))
 
-(def unix-domain-flavor
+(def ^:const unix-domain-flavor
   (cond
     test-junixsocket? (do
                         (assert junixsocket-address-class)
@@ -66,17 +69,24 @@
 
 (defn unix-socket-address
   "Returns a filesystem socket address for the given path string."
-  [path]
+  [^String path]
   (case unix-domain-flavor
     :jdk
     (Reflector/invokeStaticMethod jdk-unix-address-class "of"
-                                  (into-array String [path]))
+                                  ^"[Ljava.lang.String;" (into-array String [path]))
     :junixsocket
     (Reflector/invokeConstructor junixsocket-address-class
                                  (into-array File [(File. path)]))
     (let [msg "Support for filesystem sockets requires JDK 16+ or a junixsocket dependency"]
       (log msg)
       (throw (ex-info msg {:nrepl/kind ::no-filesystem-sockets})))))
+
+(set! *warn-on-reflection* false)
+
+(defn- bind [sock addr] (.bind sock addr))
+(defn- get-path [addr] (.getPath addr))
+
+(set! *warn-on-reflection* orig-warn-on-reflection)
 
 (defn unix-server-socket
   "Returns a filesystem socket bound to the path if the JDK is version
@@ -89,22 +99,27 @@
       :jdk
       (let [protocol (Reflector/getStaticField StandardProtocolFamily "UNIX")
             sock (Reflector/invokeStaticMethod jdk-unix-server-class "open"
+                                               ^"[Ljava.net.StandardProtocolFamily;"
                                                (into-array [protocol]))]
-        (.bind sock addr)
-        (-> addr .getPath .toFile .deleteOnExit)
+        (bind sock addr)
+        (let [^Path path (get-path addr)]
+          (-> path .toFile .deleteOnExit))
         sock)
 
       :junixsocket
       (let [new-instance (.getDeclaredMethod junixsocket-server-class
                                              "newInstance" nil)
             sock (.invoke new-instance nil nil)]
-        (.bind sock addr)
-        (-> addr .getPath File. .deleteOnExit)
+        (bind sock addr)
+        (let [^String path (get-path addr)]
+          (-> path File. .deleteOnExit))
         sock)
 
       (let [msg "Support for filesystem sockets requires JDK 16+ or a junixsocket dependency"]
         (log msg)
         (throw (ex-info msg {:nrepl/kind ::no-filesystem-sockets}))))))
+
+(set! *warn-on-reflection* false)
 
 (defn as-nrepl-uri [sock transport-scheme]
   (let [addr (and (some-> jdk-unix-server-class (instance? sock))
@@ -127,6 +142,8 @@
                 nil  ;; path
                 nil  ;; query
                 nil))))))  ;; fragment
+
+(set! *warn-on-reflection* orig-warn-on-reflection)
 
 (defprotocol Acceptable
   (accept [s]

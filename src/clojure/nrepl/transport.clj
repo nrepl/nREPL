@@ -16,6 +16,8 @@
    [java.nio ByteBuffer]
    [java.util.concurrent BlockingQueue LinkedBlockingQueue SynchronousQueue TimeUnit]))
 
+(def orig-warn-on-reflection *warn-on-reflection*)
+
 (defprotocol Transport
   "Defines the interface for a wire protocol implementation for use
    with nREPL."
@@ -79,6 +81,14 @@
        (map (fn [[k v]] [k (<bytes v)]))
        (into {})))
 
+(set! *warn-on-reflection* false)
+
+(defn- connected? [s] (.isConnected s))
+(defn- flush-output [s] (.flush s))
+(defn- close-stream [s] (.close s))
+
+(set! *warn-on-reflection* orig-warn-on-reflection)
+
 (defmacro ^{:private true} rethrow-on-disconnection
   [s & body]
   `(try
@@ -92,7 +102,7 @@
          (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server"))
          (throw e#)))
      (catch Throwable e#
-       (if (and ~s (not (.isConnected ~s)))
+       (if (and ~s (not (connected? ~s)))
          (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server"))
          (throw e#)))))
 
@@ -102,7 +112,7 @@
     messages down the transport, which is almost always bad news for the client.
 
    This will still throw an exception if called with something unencodable."
-  [output thing]
+  [^OutputStream output thing]
   (let [buffer (ByteArrayOutputStream.)]
     (bencode/write-bencode buffer thing)
     (.write output (.toByteArray buffer))))
@@ -125,13 +135,13 @@
                                  (locking out
                                    (doto out
                                      (safe-write-bencode %)
-                                     .flush)))
+                                     flush-output)))
       (fn []
         (if s
-          (.close s)
+          (close-stream s)
           (do
-            (.close in)
-            (.close out))))))))
+            (close-stream in)
+            (close-stream out))))))))
 
 (defn edn
   "Returns a Transport implementation that serializes messages
@@ -156,10 +166,10 @@
                                        (.flush)))))
       (fn []
         (if s
-          (.close s)
+          (close-stream s)
           (do
-            (.close in)
-            (.close out))))))))
+            (close-stream in)
+            (close-stream out))))))))
 
 (defn tty
   "Returns a Transport implementation suitable for serving an nREPL backend
@@ -193,7 +203,7 @@
      (fn-transport read write
                    (when s
                      (swap! read-seq (partial cons {:session @session-id :op "close"}))
-                     #(.close s))))))
+                     #(close-stream s))))))
 
 (defn tty-greeting
   "A greeting fn usable with `nrepl.server/start-server`,

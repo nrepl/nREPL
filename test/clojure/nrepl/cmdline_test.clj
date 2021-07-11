@@ -14,7 +14,7 @@
   (:import
    (com.hypirion.io Pipe ClosingPipe)
    (java.lang ProcessBuilder$Redirect)
-   (java.net SocketAddress)
+   (java.net Socket SocketAddress)
    (java.nio.channels Channels SocketChannel)
    (java.nio.file Files)
    (java.nio.file.attribute PosixFilePermissions)
@@ -239,10 +239,10 @@
       (write-bencode out message))))
 
 (defn send-junixsocket-message [message path]
-  (let [sock-class (find-class 'org.newsclub.net.unix.AFUNIXSocket)
+  (let [^Class sock-class (find-class 'org.newsclub.net.unix.AFUNIXSocket)
         new-instance (.getDeclaredMethod sock-class "newInstance" nil)
         addr (unix-socket-address path)]
-    (with-open [sock (.invoke new-instance nil nil)]
+    (with-open [^Socket sock (.invoke new-instance nil nil)]
       (.connect sock addr)
       (write-bencode (.getOutputStream sock) message))))
 
