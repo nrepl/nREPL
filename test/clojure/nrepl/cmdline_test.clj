@@ -1,6 +1,7 @@
 (ns nrepl.cmdline-test
   {:author "Chas Emerick"}
   (:require
+   [clojure.string :as str]
    [clojure.test :refer :all]
    [nrepl.ack :as ack]
    [nrepl.cmdline :as cmd]
@@ -203,3 +204,23 @@
                                           :transport 'nrepl.transport/tty})]
         (is (thrown? clojure.lang.ExceptionInfo
                      (cmd/interactive-repl server options)))))))
+
+(deftest ^:slow cmdline-namespace-resolution
+  (testing "Ensuring that namespace resolution works in the cmdline repl"
+    (let [test-input (str/join \newline ["::a"
+                                         "(ns a)" "::a"
+                                         "(ns b)" "::a"
+                                         "(ns user)" "::a"
+                                         "(require '[a :as z])" "::z/a"])
+          expected-output [":user/a"
+                           "nil" ":a/a"
+                           "nil" ":b/a"
+                           "nil" ":user/a"
+                           "nil" ":a/a"]
+          >devnull (fn [& _] nil)]
+      (binding [*in* (java.io.PushbackReader. (java.io.StringReader. test-input))]
+        (with-redefs [cmd/clean-up-and-exit >devnull]
+          (with-open [server (server/start-server)]
+            (let [results (atom [])]
+              (#'cmd/run-repl (:host server) (:port server) {:prompt >devnull :err >devnull :out >devnull :value #(swap! results conj %)})
+              (is (= expected-output @results)))))))))

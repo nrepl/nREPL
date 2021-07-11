@@ -12,6 +12,7 @@
 
 * [#227](https://github.com/nrepl/nrepl/pull/227): Fix completion for static class members.
 * [#231](https://github.com/nrepl/nrepl/issues/231): Fix sanitize error when file is `java.net.URL`.
+* [#208](https://github.com/nrepl/nrepl/issues/208): Fix namespace resolution in nrepl cmdline
 
 ## 0.8.3 (2020-10-25)
 
