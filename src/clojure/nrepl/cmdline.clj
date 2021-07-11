@@ -100,22 +100,22 @@ Exit:      Control+D or (exit) or (quit)"
                   (take-while #(nil? (:id %)))
                   (run! #(when-let [msg (:out %)] (print msg)))))
      (Thread/sleep 50)
-     (let [session (nrepl/client-session client)
-           ns (atom "user")]
+     (let [session (nrepl/client-session client)]
        (swap! running-repl assoc :transport transport)
        (swap! running-repl assoc :client session)
-       (loop []
-         (prompt @ns)
-         (flush)
-         (let [input (read *in* false 'exit)]
-           (if (done? input)
-             (System/exit 0)
-             (do (doseq [res (nrepl/message session {:op "eval" :code (pr-str input)})]
-                   (when (:value res) (value (:value res)))
-                   (when (:out res) (out (:out res)))
-                   (when (:err res) (err (:err res)))
-                   (when (:ns res) (reset! ns (:ns res))))
-                 (recur)))))))))
+       (binding [*ns* *ns*]
+         (loop []
+           (prompt *ns*)
+           (flush)
+           (let [input (read *in* false 'exit)]
+             (if (done? input)
+               (clean-up-and-exit 0)
+               (do (doseq [res (nrepl/message session {:op "eval" :code (pr-str input)})]
+                     (when (:value res) (value (:value res)))
+                     (when (:out res) (out (:out res)))
+                     (when (:err res) (err (:err res)))
+                     (when (:ns res) (set! *ns* (create-ns (symbol (:ns res))))))
+                   (recur))))))))))
 
 (def #^{:private true} option-shorthands
   {"-i" "--interactive"
