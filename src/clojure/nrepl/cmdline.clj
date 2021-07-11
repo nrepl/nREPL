@@ -10,9 +10,13 @@
    [nrepl.config :as config]
    [nrepl.core :as nrepl]
    [nrepl.ack :refer [send-ack]]
+   [nrepl.misc :refer [noisy-future]]
    [nrepl.server :as nrepl-server]
+   [nrepl.socket :as socket]
    [nrepl.transport :as transport]
-   [nrepl.version :as version]))
+   [nrepl.version :as version])
+  (:import
+   [java.net URI]))
 
 (defn- clean-up-and-exit
   "Performs any necessary clean up and calls `(System/exit status)`."
@@ -26,7 +30,8 @@
   "Requests that the process exit with the given `status`.  Does not
   return."
   [status]
-  (throw (ex-info nil {::kind ::exit ::status status})))
+  ;; :nrepl/kind is our shared (ns independent) ExceptionInfo discriminator
+  (throw (ex-info nil {:nrepl/kind ::exit ::status status})))
 
 (defn die
   "`Print`s items in `msg` to *err* and then exits with a status of 2."
@@ -96,9 +101,9 @@ Exit:      Control+D or (exit) or (quit)"
      (println (repl-intro))
      ;; We take 50ms to listen to any greeting messages, and display the value
      ;; in the `:out` slot.
-     (future (->> (client)
-                  (take-while #(nil? (:id %)))
-                  (run! #(when-let [msg (:out %)] (print msg)))))
+     (noisy-future (->> (client)
+                        (take-while #(nil? (:id %)))
+                        (run! #(when-let [msg (:out %)] (print msg)))))
      (Thread/sleep 50)
      (let [session (nrepl/client-session client)
            ns (atom "user")]
@@ -125,6 +130,7 @@ Exit:      Control+D or (exit) or (quit)"
    "-b" "--bind"
    "-h" "--host"
    "-p" "--port"
+   "-s" "--socket"
    "-m" "--middleware"
    "-t" "--transport"
    "-n" "--handler"
@@ -174,6 +180,7 @@ Exit:      Control+D or (exit) or (quit)"
   -b/--bind ADDR              Bind address, by default \"127.0.0.1\".
   -h/--host ADDR              Host address to connect to when using --connect. Defaults to \"127.0.0.1\".
   -p/--port PORT              Start nREPL on PORT. Defaults to 0 (random port) if not specified.
+  -s/--socket PATH            Start nREPL on filesystem socket at PATH.
   --ack ACK-PORT              Acknowledge the port of this server to another nREPL server running on ACK-PORT.
   -n/--handler HANDLER        The nREPL message handler to use for each incoming connection; defaults to the result of `(nrepl.server/default-handler)`.
   -m/--middleware MIDDLEWARE  A sequence of vars, representing middleware you wish to mix in to the nREPL handler.
@@ -334,6 +341,7 @@ Exit:      Control+D or (exit) or (quit)"
   [options]
   {:port (->int (:port options))
    :host (:host options)
+   :socket (:socket options)
    :transport (options->transport options)
    :repl-fn (options->repl-fn options)})
 
@@ -342,10 +350,11 @@ Exit:      Control+D or (exit) or (quit)"
   Returns map of processed options to start an nREPL server."
   [options]
   (let [middleware (sanitize-middleware-option (:middleware options))
-        {:keys [host port transport]} (connection-opts options)]
+        {:keys [host port socket transport]} (connection-opts options)]
     (merge options
            {:host host
             :port port
+            :socket socket
             :transport transport
             :bind (:bind options)
             :middleware middleware
@@ -401,13 +410,14 @@ Exit:      Control+D or (exit) or (quit)"
   Returns connection header string."
   [server options]
   (let [transport (:transport options)
-        port (:port server)
-        ^java.net.ServerSocket ssocket (:server-socket server)
-        host (.getHostName (.getInetAddress ssocket))]
+        ^java.net.ServerSocket ssocket (:server-socket server)]
     ;; The format here is important, as some tools (e.g. CIDER) parse the string
     ;; to extract from it the host and the port to connect to
-    (format "nREPL server started on port %d on host %s - %s://%s:%d"
-            port host (transport/uri-scheme transport) host port)))
+    (let [^URI uri (socket/as-nrepl-uri ssocket (transport/uri-scheme transport))]
+      (if-let [host (.getHost uri)]
+        (format "nREPL server started on port %d on host %s - %s"
+                (.getPort uri) host uri)
+        (str "nREPL server started on socket " (.toASCIIString uri))))))
 
 (defn save-port-file
   "Writes a file relative to project classpath with port number so other tools
@@ -425,10 +435,11 @@ Exit:      Control+D or (exit) or (quit)"
   "Creates an nREPL server instance.
   Takes map of CLI options.
   Returns nREPL server map."
-  [{:keys [port bind handler transport greeting]}]
+  [{:keys [port bind socket handler transport greeting]}]
   (nrepl-server/start-server
    :port port
    :bind bind
+   :socket socket
    :handler handler
    :transport-fn transport
    :greeting-fn greeting))
@@ -458,7 +469,13 @@ Exit:      Control+D or (exit) or (quit)"
     (let [[options _args] (args->cli-options args)]
       (dispatch-commands options))
     (catch clojure.lang.ExceptionInfo ex
-      (let [{:keys [::kind ::status]} (ex-data ex)]
-        (when (= kind ::exit)
-          (clean-up-and-exit status))
-        (throw ex)))))
+      (let [{:keys [:nrepl/kind ::status]} (ex-data ex)]
+        (case kind
+          ::exit (clean-up-and-exit status)
+          (:nrepl.server/no-filesystem-sockets
+           :nrepl.server/invalid-start-request)
+          (do
+            (binding [*out* *err*]
+              (println (.getMessage ex)))
+            (clean-up-and-exit 2))
+          (throw ex))))))

@@ -25,7 +25,8 @@
    [nrepl.transport :as transport])
   (:import
    (java.io File Writer)
-   java.net.SocketException))
+   java.net.SocketException
+   (nrepl.server Server)))
 
 (defmacro when-require [n & body]
   (let [nn (eval n)]
@@ -55,7 +56,7 @@
 
 (defn start-server-for-transport-fn
   [transport-fn f]
-  (with-open [server (server/start-server :transport-fn transport-fn)]
+  (with-open [^Server server (server/start-server :transport-fn transport-fn)]
     (binding [*server* server
               *transport-fn* transport-fn]
       (testing (str (-> transport-fn meta :name) " transport")
@@ -583,7 +584,7 @@
 
 (deftest transports-fail-on-disconnects
   (testing "Ensure that transports fail ASAP when the server they're connected to goes down."
-    (let [server (server/start-server :transport-fn *transport-fn*)
+    (let [^Server server (server/start-server :transport-fn *transport-fn*)
           ^nrepl.transport.FnTransport
           transport (connect :port (:port server)
                              :transport-fn *transport-fn*)]
@@ -696,11 +697,12 @@
     (is (= [2] (response-values (response-seq conn 100))))))
 
 (deftest test-ack
-  (with-open [s (server/start-server :transport-fn *transport-fn*
-                                     :handler (ack/handle-ack (server/default-handler)))]
+  (with-open [^Server s (server/start-server :transport-fn *transport-fn*
+                                             :handler (-> (server/default-handler)
+                                                          ack/handle-ack))]
     (ack/reset-ack-port!)
-    (with-open [s2 (server/start-server :transport-fn *transport-fn*
-                                        :ack-port (:port s))]
+    (with-open [^Server s2 (server/start-server :transport-fn *transport-fn*
+                                                :ack-port (:port s))]
       (is (= (:port s2) (ack/wait-for-ack 10000))))))
 
 (def-repl-test agent-await

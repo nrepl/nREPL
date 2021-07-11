@@ -11,7 +11,7 @@
   :javac-options ["-target" "8" "-source" "8"]
 
   :aliases {"bump-version" ["change" "version" "leiningen.release/bump-version"]
-            "test-all" ["with-profile" "+1.7:+1.8:+1.9:+1.10:+fastlane" "test"]
+            "test-all" ["with-profile" "+1.7:+1.8:+1.9:+1.10:+fastlane:+junixsocket" "test"]
             "docs" ["with-profile" "+maint" "run" "-m" "nrepl.impl.docs" "--file"
                     ~(clojure.java.io/as-relative-path
                       (clojure.java.io/file "doc" "modules" "ROOT" "pages" "ops.adoc"))]
@@ -40,12 +40,14 @@
                     ;; TODO: replicate koacha's version filter logic here
                     :test-selectors {:default (complement :min-java-version)}
                     :aliases {"test" "test2junit"}}
+             :junixsocket {:jvm-opts ["-Dnrepl.test.junixsocket=true"]
+                           :dependencies [[com.kohlschutter.junixsocket/junixsocket-core "2.3.2"]]}
              ;; Clojure versions matrix
-             :provided {:dependencies [[org.clojure/clojure "1.10.1"]]}
+             :provided {:dependencies [[org.clojure/clojure "1.10.2"]]}
              :1.7 {:dependencies [[org.clojure/clojure "1.7.0"]]}
              :1.8 {:dependencies [[org.clojure/clojure "1.8.0"]]}
              :1.9 {:dependencies [[org.clojure/clojure "1.9.0"]]}
-             :1.10 {:dependencies [[org.clojure/clojure "1.10.1"]]
+             :1.10 {:dependencies [[org.clojure/clojure "1.10.2"]]
                     :source-paths ["src/spec"]}
              :master {:repositories [["snapshots"
                                       "https://oss.sonatype.org/content/repositories/snapshots"]]

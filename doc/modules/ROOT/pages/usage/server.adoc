@@ -53,6 +53,30 @@ how you can easily start a ClojureScript capable nREPL:
 $ clj -R:nREPL -m nrepl.cmdline --middleware "[cider.piggieback/wrap-cljs-repl]"
 ----
 
+By default, nREPL listens for connections on a randomly chosen local
+port with no authentication, but you can specify the address or port,
+or, if you're using JDK 16 or newer, or you add a
+https://kohlschutter.github.io/junixsocket/[junixsocket] dependency,
+you can ask it to listen on a UNIX domain (filesystem) socket instead:
+
+[source,clojure]
+----
+{
+;; ...
+:aliases {:nREPL
+          {:extra-deps
+           ;; UNIX domain socket support was added in 0.9.0
+           {nrepl/nrepl {:mvn/version "0.9.0"}
+            com.kohlschutter.junixsocket/junixsocket-core {:mvn/version "2.3.2"}}}}
+}
+----
+
+[source,shell]
+----
+$ mkdir -m go-rwx nrepl-test
+$ clj -R:nREPL -m nrepl.cmdline --socket nrepl-test/socket
+----
+
 Here's a listing of all the options available via nREPL's command-line
 interface (this output was simply generated with `--help`):
 
@@ -63,6 +87,7 @@ interface (this output was simply generated with `--help`):
 -b/--bind ADDR              Bind address, by default "127.0.0.1".
 -h/--host ADDR              Host address to connect to when using --connect. Defaults to "127.0.0.1".
 -p/--port PORT              Start nREPL on PORT. Defaults to 0 (random port) if not specified.
+-s/--socket PATH            Start nREPL on filesystem socket at PATH.
 --ack ACK-PORT              Acknowledge the port of this server to another nREPL server running on ACK-PORT.
 -n/--handler HANDLER        The nREPL message handler to use for each incoming connection; defaults to the result of `(nrepl.server/default-handler)`.
 -m/--middleware MIDDLEWARE  A sequence of vars, representing middleware you wish to mix in to the nREPL handler.
@@ -186,6 +211,20 @@ WARNING: Keep in mind that running a nREPL server on a public address
 is an epic security hole! As the connections are insecure (no
 authentication, no authorization) by default anyone can connect to
 your app and modify its behaviour or run code on the remote host.
+
+You can also ask nREPL to listen on a UNIX domain (filesystem) socket
+with the `:socket` keyword (if you're using JDK 16 or newer add a
+https://kohlschutter.github.io/junixsocket/[junixsocket] dependency),
+which should be as secure as the access to the socket\'s parent
+directories:
+
+[source,clojure]
+----
+=> (require '[nrepl.server :refer [start-server stop-server]])
+nil
+=> (defonce server (start-server :socket "/some/where/safe/nrepl"))
+='user/server
+----
 
 Depending on what the lifecycle of your application is, whether you want to be
 able to easily restart the server, etc., you might want to put the value

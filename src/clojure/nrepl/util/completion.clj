@@ -168,16 +168,16 @@
   (.. file (replace ".class" "") (replace File/separator ".")))
 
 (def top-level-classes
-  (future
-    (doall
-     (for [file classfiles :when (re-find #"^[^\$]+\.class" file)]
-       (classname file)))))
+  (misc/noisy-future
+   (doall
+    (for [file classfiles :when (re-find #"^[^\$]+\.class" file)]
+      (classname file)))))
 
 (def nested-classes
-  (future
-    (doall
-     (for [file classfiles :when (re-find #"^[^\$]+(\$[^\d]\w*)+\.class" file)]
-       (classname file)))))
+  (misc/noisy-future
+   (doall
+    (for [file classfiles :when (re-find #"^[^\$]+(\$[^\d]\w*)+\.class" file)]
+      (classname file)))))
 
 (defn resolve-class [ns sym]
   (try (let [val (ns-resolve ns sym)]

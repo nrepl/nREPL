@@ -5,7 +5,7 @@
    clojure.main
    [nrepl.middleware :refer [set-descriptor!]]
    [nrepl.middleware.interruptible-eval :refer [*msg* evaluate]]
-   [nrepl.misc :refer [uuid response-for]]
+   [nrepl.misc :refer [noisy-future uuid response-for]]
    [nrepl.transport :as t])
   (:import
    (clojure.lang LineNumberingPushbackReader)
@@ -173,11 +173,11 @@
   [^Thread t]
   (.interrupt t)
   (Thread/sleep 100)
-  (future
-    (Thread/sleep 5000)
-    (when-not (= (Thread$State/TERMINATED)
-                 (.getState t))
-      (.stop t))))
+  (noisy-future
+   (Thread/sleep 5000)
+   (when-not (= (Thread$State/TERMINATED)
+                (.getState t))
+     (.stop t))))
 
 (defn session-exec
   "Takes a session id and returns a maps of three functions meant for interruptible-eval:

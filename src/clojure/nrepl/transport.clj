@@ -5,14 +5,18 @@
    [clojure.java.io :as io]
    [clojure.walk :as walk]
    [nrepl.bencode :as bencode]
+   [nrepl.socket :as socket]
    [clojure.edn :as edn]
-   [nrepl.misc :refer [uuid]]
+   [nrepl.misc :refer [noisy-future uuid]]
    nrepl.version)
   (:import
    clojure.lang.RT
    [java.io ByteArrayOutputStream EOFException PushbackInputStream PushbackReader OutputStream]
-   [java.net Socket SocketException]
+   [java.net SocketException StandardSocketOptions]
+   [java.nio ByteBuffer]
    [java.util.concurrent BlockingQueue LinkedBlockingQueue SynchronousQueue TimeUnit]))
+
+(def orig-warn-on-reflection *warn-on-reflection*)
 
 (defprotocol Transport
   "Defines the interface for a wire protocol implementation for use
@@ -37,11 +41,15 @@
   ([transport-read write] (fn-transport transport-read write nil))
   ([transport-read write close]
    (let [read-queue (SynchronousQueue.)
-         msg-pump (future (try
-                            (while true
-                              (.put read-queue (transport-read)))
-                            (catch Throwable t
-                              (.put read-queue t))))]
+         msg-pump (noisy-future
+                   (try
+                     (try
+                       (while true
+                         (.put read-queue (transport-read)))
+                       (catch Throwable t
+                         (.put read-queue t)))
+                     (catch InterruptedException ex
+                       nil)))]
      (FnTransport.
       (let [failure (atom nil)]
         #(if @failure
@@ -73,8 +81,16 @@
        (map (fn [[k v]] [k (<bytes v)]))
        (into {})))
 
+(set! *warn-on-reflection* false)
+
+(defn- connected? [s] (.isConnected s))
+(defn- flush-output [s] (.flush s))
+(defn- close-stream [s] (.close s))
+
+(set! *warn-on-reflection* orig-warn-on-reflection)
+
 (defmacro ^{:private true} rethrow-on-disconnection
-  [^Socket s & body]
+  [s & body]
   `(try
      ~@body
      (catch RuntimeException e#
@@ -86,7 +102,7 @@
          (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server"))
          (throw e#)))
      (catch Throwable e#
-       (if (and ~s (not (.isConnected ~s)))
+       (if (and ~s (not (connected? ~s)))
          (throw (SocketException. "The transport's socket appears to have lost its connection to the nREPL server"))
          (throw e#)))))
 
@@ -96,18 +112,18 @@
     messages down the transport, which is almost always bad news for the client.
 
    This will still throw an exception if called with something unencodable."
-  [output thing]
+  [^OutputStream output thing]
   (let [buffer (ByteArrayOutputStream.)]
     (bencode/write-bencode buffer thing)
-    (.write ^OutputStream output (.toByteArray buffer))))
+    (.write output (.toByteArray buffer))))
 
 (defn bencode
   "Returns a Transport implementation that serializes messages
    over the given Socket or InputStream/OutputStream using bencode."
-  ([^Socket s] (bencode s s s))
-  ([in out & [^Socket s]]
-   (let [in (PushbackInputStream. (io/input-stream in))
-         out (io/output-stream out)]
+  ([s] (bencode s s s))
+  ([in out & [s]]
+   (let [in (PushbackInputStream. (socket/buffered-input in))
+         out (socket/buffered-output out)]
      (fn-transport
       #(let [payload (rethrow-on-disconnection s (bencode/read-bencode in))
              unencoded (<bytes (payload "-unencoded"))
@@ -119,20 +135,20 @@
                                  (locking out
                                    (doto out
                                      (safe-write-bencode %)
-                                     .flush)))
+                                     flush-output)))
       (fn []
         (if s
-          (.close s)
+          (close-stream s)
           (do
-            (.close in)
-            (.close out))))))))
+            (close-stream in)
+            (close-stream out))))))))
 
 (defn edn
   "Returns a Transport implementation that serializes messages
    over the given Socket or InputStream/OutputStream using EDN."
   {:added "0.7"}
-  ([^Socket s] (edn s s s))
-  ([in out & [^Socket s]]
+  ([s] (edn s s s))
+  ([in out & [s]]
    (let [in (java.io.PushbackReader. (io/reader in))
          out (io/writer out)]
      (fn-transport
@@ -150,16 +166,16 @@
                                        (.flush)))))
       (fn []
         (if s
-          (.close s)
+          (close-stream s)
           (do
-            (.close in)
-            (.close out))))))))
+            (close-stream in)
+            (close-stream out))))))))
 
 (defn tty
   "Returns a Transport implementation suitable for serving an nREPL backend
    via simple in/out readers, as with a tty or telnet connection."
-  ([^Socket s] (tty s s s))
-  ([in out & [^Socket s]]
+  ([s] (tty s s s))
+  ([in out & [s]]
    (let [r (PushbackReader. (io/reader in))
          w (io/writer out)
          cns (atom "user")
@@ -187,7 +203,7 @@
      (fn-transport read write
                    (when s
                      (swap! read-seq (partial cons {:session @session-id :op "close"}))
-                     #(.close s))))))
+                     #(close-stream s))))))
 
 (defn tty-greeting
   "A greeting fn usable with `nrepl.server/start-server`,

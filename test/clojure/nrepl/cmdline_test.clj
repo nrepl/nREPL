@@ -1,20 +1,41 @@
 (ns nrepl.cmdline-test
   {:author "Chas Emerick"}
   (:require
+   [clojure.java.io :refer [as-file]]
    [clojure.test :refer :all]
    [nrepl.ack :as ack]
+   [nrepl.bencode :refer [write-bencode]]
    [nrepl.cmdline :as cmd]
    [nrepl.core :as nrepl]
    [nrepl.core-test :refer [*server* *transport-fn* transport-fns]]
    [nrepl.server :as server]
+   [nrepl.socket :refer [find-class unix-domain-flavor unix-socket-address]]
    [nrepl.transport :as transport])
-  (:import (com.hypirion.io Pipe ClosingPipe)))
+  (:import
+   (com.hypirion.io Pipe ClosingPipe)
+   (java.lang ProcessBuilder$Redirect)
+   (java.net Socket SocketAddress)
+   (java.nio.channels Channels SocketChannel)
+   (java.nio.file Files)
+   (java.nio.file.attribute PosixFilePermissions)
+   (nrepl.server Server)))
+
+(defn create-tmpdir
+  "Creates a temporary directory in parent (something clojure.java.io/as-path
+  can handle) with the specified permissions string (something
+  PosixFilePermissions/asFileAttribute can handle i.e. \"rw-------\") and
+  returns its Path."
+  [parent prefix permissions]
+  (let [nio-path (.toPath (as-file parent))
+        perms (PosixFilePermissions/fromString permissions)
+        attr (PosixFilePermissions/asFileAttribute perms)]
+    (Files/createTempDirectory nio-path prefix (into-array [attr]))))
 
 (defn- start-server-for-transport-fn
   [transport-fn f]
-  (with-open [server (server/start-server
-                      :transport-fn transport-fn
-                      :handler (ack/handle-ack (server/default-handler)))]
+  (with-open [^Server server (server/start-server
+                              :transport-fn transport-fn
+                              :handler (ack/handle-ack (server/default-handler)))]
     (binding [*server* server
               *transport-fn* transport-fn]
       (testing (str (-> transport-fn meta :name) " transport")
@@ -73,6 +94,7 @@
 (deftest connection-opts
   (is (= {:port 5000
           :host "0.0.0.0"
+          :socket nil
           :transport #'transport/bencode
           :repl-fn #'nrepl.cmdline/run-repl}
          (cmd/connection-opts {:port "5000"
@@ -111,9 +133,9 @@
       (is (= "" output)))))
 
 (deftest server-started-message
-  (with-open [server (server/start-server
-                      :transport-fn #'transport/bencode
-                      :handler server/default-handler)]
+  (with-open [^Server server (server/start-server
+                              :transport-fn #'transport/bencode
+                              :handler server/default-handler)]
     (is (re-find #"nREPL server started on port \d+ on host .* - .*//.*:\d+"
                  (cmd/server-started-message
                   server
@@ -197,9 +219,62 @@
 
 (deftest no-tty-client
   (testing "Trying to connect with the tty transport should fail."
-    (with-open [server (server/start-server :transport-fn #'transport/tty)]
+    (with-open [^Server server (server/start-server :transport-fn #'transport/tty)]
       (let [options (cmd/connection-opts {:port      (:port server)
                                           :host      "localhost"
                                           :transport 'nrepl.transport/tty})]
         (is (thrown? clojure.lang.ExceptionInfo
                      (cmd/interactive-repl server options)))))))
+
+;;; Unix domain socket tests
+
+(defn send-jdk-socket-message [message path]
+  (let [^SocketAddress addr (unix-socket-address path)
+        sock (SocketChannel/open addr)]
+    ;; Assume it's safe to use Channels input/output streams here since
+    ;; we're never reading and writing at the same time.
+    ;; (cf. https://bugs.openjdk.java.net/browse/JDK-4509080 - not fixed
+    ;; as of at least JDK 16).
+    (with-open [out (Channels/newOutputStream sock)]
+      (write-bencode out message))))
+
+(defn send-junixsocket-message [message path]
+  (let [^Class sock-class (find-class 'org.newsclub.net.unix.AFUNIXSocket)
+        new-instance (.getDeclaredMethod sock-class "newInstance" nil)
+        addr (unix-socket-address path)]
+    (with-open [^Socket sock (.invoke new-instance nil nil)]
+      (.connect sock addr)
+      (write-bencode (.getOutputStream sock) message))))
+
+(deftest ^:slow basic-fs-socket-behavior
+
+  (if-not unix-domain-flavor
+    (binding [*out* *err*]
+      (println "Skipping UNIX domain socket tests for JDK < 16 without junixsocket dependency"))
+    (let [tmpdir (create-tmpdir "target" "socket-test-" "rwx------")
+          sock-path (str tmpdir "/socket")
+          sock-file (as-file sock-path)]
+      (try
+        ;; Use a Process rather than sh so we can see server errors
+        (let [cmd (into-array ["java"
+                               "-cp" (System/getProperty "java.class.path")
+                               "nrepl.main" "-s" sock-path])
+              server (.start (doto (ProcessBuilder. ^"[Ljava.lang.String;" cmd)
+                               (.redirectOutput ProcessBuilder$Redirect/INHERIT)
+                               (.redirectError ProcessBuilder$Redirect/INHERIT)))]
+          (try
+            (while (not (.exists sock-file))
+              (Thread/sleep 100))
+            (case unix-domain-flavor
+              :jdk
+              (send-jdk-socket-message {:code "(System/exit 42)" :op :eval}
+                                       sock-path)
+              :junixsocket
+              (send-junixsocket-message {:code "(System/exit 42)" :op :eval}
+                                        sock-path))
+            (is (= 42 (.waitFor server)))
+            (finally
+              (.destroy server))))
+        (finally
+          (.delete sock-file)
+          (Files/delete tmpdir))))))

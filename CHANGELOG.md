@@ -7,6 +7,12 @@
 * [#217](https://github.com/nrepl/nrepl/pull/217): Add keyword completion support.
 * [#226](https://github.com/nrepl/nrepl/pull/226): Add doc and arglists to completion responses.
 * [#238](https://github.com/nrepl/nrepl/pull/238): Expand completion and lookup error message when ns not found.
+* [#217](https://github.com/nrepl/nrepl/pull/217): Add server support
+  for UNIX domain (filesystem) sockets via `-s/--socket PATH` on the
+  command line or `(start-server ... :socket PATH)` whenever the JDK
+  is version 16 or newer or
+  [junixsocket](https://kohlschutter.github.io/junixsocket/) is
+  avaialble as a dependency.
 
 ### Bugs fixed
 
